@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Endless Dash</title>
+<style>
+  * {
+    box-sizing: border-box;
+  }
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%;
+    font-family: Arial, sans-serif;
+    background: #222;
+    color: white;
+    overflow: hidden;
+    user-select: none;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+  }
+  #gameCanvas {
+    background: #111;
+    border: 3px solid #555;
+    display: block;
+  }
+  #jumpButton {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #007bff;
+    color: white;
+    font-size: 2.5rem;
+    padding: 15px 40px;
+    border: none;
+    border-radius: 15px;
+    z-index: 10;
+    user-select: none;
+    cursor: pointer;
+    display: block !important;
+  }
+  #homeScreen, #gameOverScreen {
+    position: fixed;
+    top:0; left:0; width:100%; height:100%;
+    background: #111;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+    z-index: 20;
+  }
+  #homeScreen button, #gameOverScreen button {
+    font-size: 1.5rem;
+    padding: 10px 30px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+  }
+  #scoreDisplay {
+    position: fixed;
+    top: 15px;
+    left: 15px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    z-index: 15;
+  }
+</style>
+</head>
+<body>
+
+<div id="homeScreen">
+  <h1>Endless Dash</h1>
+  <button id="startBtn">Start Game</button>
+</div>
+
+<div id="gameOverScreen" style="display:none;">
+  <h1>Game Over</h1>
+  <p id="finalScore"></p>
+  <p id="highScoreText"></p>
+  <button id="returnHomeBtn">Return Home</button>
+</div>
+
+<div id="scoreDisplay" style="display:none;">Score: 0</div>
+
+<button id="jumpButton">JUMP</button>
+
+<canvas id="gameCanvas" width="600" height="300"></canvas>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  const startBtn = document.getElementById('startBtn');
+  const homeScreen = document.getElementById('homeScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScoreText = document.getElementById('finalScore');
+  const highScoreText = document.getElementById('highScoreText');
+  const returnHomeBtn = document.getElementById('returnHomeBtn');
+  const scoreDisplay = document.getElementById('scoreDisplay');
+  const jumpButton = document.getElementById('jumpButton');
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  const GRAVITY = 0.6;
+  const FLOOR_Y = H - 50;
+  const PLAYER_SIZE = 30;
+  const JUMP_VEL = -12;
+  const SPAWN_INTERVAL = 90;
+
+  const HELICOPTER_FLY_TIME = 6.2 * 60;   // frames
+  const FORCE_FIELD_ACTIVE_TIME = 5 * 60; // frames
+  const FORCE_FIELD_GRACE_TIME = 30;      // 0.5 sec grace frames
+  const HELICOPTER_INVINCIBILITY_TIME = 30; // 0.5 sec invincibility after flying
+  const FORCE_FIELD_INVINCIBILITY_TIME = 30; // 0.5 sec invincibility after force field ends
+
+  let player = {
+    x: 80,
+    y: FLOOR_Y - PLAYER_SIZE,
+    width: PLAYER_SIZE,
+    height: PLAYER_SIZE,
+    vy: 0,
+    onGround: true,
+
+    // Force field timers and state
+    forceField: false,
+    forceFieldTimer: 0,
+    forceFieldGraceTimer: 0,
+    forceFieldInvincibilityTimer: 0,
+
+    // Helicopter timers and state
+    flying: false,
+    flyTimer: 0,
+    helicopterInvincibilityTimer: 0,
+
+    // General invincibility timer (for after helicopter flight)
+    invincibleTimer: 0,
+  };
+
+  let spikes = [];
+  let forceFields = [];
+  let helicopters = [];
+  let frameCount = 0;
+  let score = 0;
+  let highScore = 0;
+  let gameRunning = false;
+  let speed = 4;
+
+  if(localStorage.getItem('endlessDashHighScore')) {
+    highScore = Number(localStorage.getItem('endlessDashHighScore'));
+  }
+
+  function rectsOverlap(r1, r2) {
+    return !(r2.x > r1.x + r1.width ||
+             r2.x + r2.width < r1.x ||
+             r2.y > r1.y + r1.height ||
+             r2.y + r2.height < r1.y);
+  }
+
+  function spawnObjects() {
+    if(frameCount % SPAWN_INTERVAL === 0) {
+      const rand = Math.random();
+      if(rand < 0.7) {
+        spikes.push({x: W + 20, y: FLOOR_Y - 20, width: 20, height: 20});
+      } else if(rand < 0.85) {
+        forceFields.push({x: W + 20, y: FLOOR_Y - 50, width: 25, height: 25});
+      } else {
+        helicopters.push({x: W + 60, y: FLOOR_Y - 100, width: 50, height: 30, active: true});
+      }
+    }
+  }
+
+  function resetGame() {
+    player = {
+      x: 80,
+      y: FLOOR_Y - PLAYER_SIZE,
+      width: PLAYER_SIZE,
+      height: PLAYER_SIZE,
+      vy: 0,
+      onGround: true,
+
+      forceField: false,
+      forceFieldTimer: 0,
+      forceFieldGraceTimer: 0,
+      forceFieldInvincibilityTimer: 0,
+
+      flying: false,
+      flyTimer: 0,
+      helicopterInvincibilityTimer: 0,
+
+      invincibleTimer: 0,
+    };
+    spikes = [];
+    forceFields = [];
+    helicopters = [];
+    frameCount = 0;
+    score = 0;
+    speed = 4;
+  }
+
+  function drawPlayer() {
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+
+    // Draw force field emoji only if force field active or in grace period (not invincibility after it fully ends)
+    if(player.forceField && (player.forceFieldTimer > 0 || player.forceFieldGraceTimer > 0)) {
+      ctx.font = '50px serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+      ctx.fillText('⭕️', player.x + player.width/2, player.y + player.height/2);
+    }
+
+    // Draw helicopter emoji hovering above player only when flying
+    if(player.flying) {
+      ctx.font = '40px serif';
+      ctx.textBaseline = 'bottom';
+      ctx.textAlign = 'center';
+      ctx.fillText('🚁', player.x + player.width/2, player.y - 10);
+    }
+  }
+
+  function drawSpike(spike) {
+    ctx.fillStyle = 'red';
+    ctx.beginPath();
+    ctx.moveTo(spike.x, spike.y + spike.height);
+    ctx.lineTo(spike.x + spike.width / 2, spike.y);
+    ctx.lineTo(spike.x + spike.width, spike.y + spike.height);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawForceField(ff) {
+    ctx.font = '28px serif';
+    ctx.textBaseline = 'top';
+    ctx.fillText('⭕️', ff.x, ff.y);
+  }
+
+  function drawHelicopter(heli) {
+    ctx.font = '30px serif';
+    ctx.textBaseline = 'top';
+    ctx.fillText('🚁', heli.x, heli.y);
+  }
+
+  function drawFloor() {
+    ctx.fillStyle = '#333';
+    ctx.fillRect(0, FLOOR_Y, W, H - FLOOR_Y);
+  }
+
+  function drawScore() {
+    scoreDisplay.textContent = `Score: ${Math.floor(score)}`;
+  }
+
+  function gameLoop() {
+    if(!gameRunning) return;
+    frameCount++;
+    ctx.clearRect(0, 0, W, H);
+
+    // Update force field timers and invincibility after force field ends
+    if(player.forceField) {
+      if(player.forceFieldTimer > 0) {
+        player.forceFieldTimer--;
+      } else if(player.forceFieldGraceTimer > 0) {
+        player.forceFieldGraceTimer--;
+      } else if(player.forceFieldInvincibilityTimer > 0) {
+        player.forceField = false; // force field visually gone now
+        player.forceFieldInvincibilityTimer--;
+      } else {
+        player.forceField = false;
+      }
+    } else if(player.forceFieldInvincibilityTimer > 0) {
+      player.forceFieldInvincibilityTimer--;
+    }
+
+    // Update helicopter timers and invincibility after flight ends
+    if(player.flying) {
+      player.flyTimer--;
+      player.y = FLOOR_Y - PLAYER_SIZE - 60;
+      if(player.flyTimer <= 0) {
+        player.flying = false;
+        player.helicopterInvincibilityTimer = HELICOPTER_INVINCIBILITY_TIME;
+      }
+    } else if(player.helicopterInvincibilityTimer > 0) {
+      player.helicopterInvincibilityTimer--;
+    }
+
+    // General invincible timer (space after helicopter flight) - not really needed separately now but keep for key jumps
+    if(player.invincibleTimer > 0) {
+      player.invincibleTimer--;
+    }
+
+    if(!player.flying) {
+      player.vy += GRAVITY;
+      player.y += player.vy;
+      if(player.y > FLOOR_Y - PLAYER_SIZE) {
+        player.y = FLOOR_Y - PLAYER_SIZE;
+        player.vy = 0;
+        player.onGround = true;
+      } else {
+        player.onGround = false;
+      }
+    }
+
+    spikes.forEach((spike, i) => {
+      spike.x -= speed;
+      if(spike.x + spike.width < 0) spikes.splice(i, 1);
+    });
+    forceFields.forEach((ff, i) => {
+      ff.x -= speed;
+      if(ff.x + ff.width < 0) forceFields.splice(i, 1);
+    });
+    helicopters.forEach((heli, i) => {
+      heli.x -= speed;
+      if(heli.x + heli.width < 0) helicopters.splice(i, 1);
+    });
+
+    // Check collisions with spikes, only end game if NO invincibility timers active:
+    const invincible = player.invincibleTimer > 0 || player.helicopterInvincibilityTimer > 0 || player.forceFieldTimer > 0 || player.forceFieldGraceTimer > 0 || player.forceFieldInvincibilityTimer > 0;
+    if(!invincible) {
+      for(let spike of spikes) {
+        if(rectsOverlap(player, spike)) {
+          endGame();
+          return;
+        }
+      }
+    }
+
+    // Collect force field pickup
+    for(let i = 0; i < forceFields.length; i++) {
+      if(rectsOverlap(player, forceFields[i])) {
+        player.forceField = true;
+        player.forceFieldTimer = FORCE_FIELD_ACTIVE_TIME;
+        player.forceFieldGraceTimer = FORCE_FIELD_GRACE_TIME;
+        player.forceFieldInvincibilityTimer = 0; // reset any old invincibility
+        forceFields.splice(i, 1);
+        break;
+      }
+    }
+
+    // Collect helicopter pickup
+    if(!player.flying && player.helicopterInvincibilityTimer <= 0) {
+      for(let i = 0; i < helicopters.length; i++) {
+        if(rectsOverlap(player, helicopters[i])) {
+          player.flying = true;
+          player.flyTimer = HELICOPTER_FLY_TIME;
+          helicopters.splice(i, 1);
+          break;
+        }
+      }
+    }
+
+    drawFloor();
+    spikes.forEach(drawSpike);
+    forceFields.forEach(drawForceField);
+    helicopters.forEach(drawHelicopter);
+    drawPlayer();
+
+    score += 0.1;
+    drawScore();
+    spawnObjects();
+
+    if(frameCount % 300 === 0) {
+      speed *= 1.05;
+    }
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  function startGame() {
+    resetGame();
+    homeScreen.style.display = 'none';
+    gameOverScreen.style.display = 'none';
+    scoreDisplay.style.display = 'block';
+
+    jumpButton.style.display = 'block';
+
+    gameRunning = true;
+    gameLoop();
+  }
+
+  function endGame() {
+    gameRunning = false;
+    scoreDisplay.style.display = 'none';
+
+    if(score > highScore) {
+      highScore = score;
+      localStorage.setItem('endlessDashHighScore', Math.floor(highScore));
+    }
+
+    finalScoreText.textContent = `Score: ${Math.floor(score)}`;
+    highScoreText.textContent = `High Score: ${Math.floor(highScore)}`;
+    gameOverScreen.style.display = 'flex';
+
+    jumpButton.style.display = 'block';
+  }
+
+  function jump() {
+    if(!gameRunning) return;
+    if(player.onGround || player.flying) {
+      if(!player.flying) {
+        player.vy = JUMP_VEL;
+        player.onGround = false;
+      }
+    }
+  }
+
+  window.addEventListener('keydown', e => {
+    if(e.code === 'Space' || e.code === 'ArrowUp') {
+      e.preventDefault();
+      jump();
+    }
+  });
+
+  jumpButton.addEventListener('touchstart', e => {
+    e.preventDefault();
+    jump();
+  });
+  jumpButton.addEventListener('mousedown', e => {
+    e.preventDefault();
+    jump();
+  });
+
+  startBtn.addEventListener('click', () => {
+    startGame();
+  });
+  returnHomeBtn.addEventListener('click', () => {
+    gameOverScreen.style.display = 'none';
+    homeScreen.style.display = 'flex';
+  });
+})();
+</script>
+
+</body>
+</html>
